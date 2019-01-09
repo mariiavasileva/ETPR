@@ -8,6 +8,7 @@
 #include <gsl/gsl_cdf.h>
 #include <capd/intervals/lib.h>
 #include "pdrh2box.h"
+#include <gsl/gsl_statistics.h>
 //#include "algorithm.h"
 #include "qmc.h"
 #include "easylogging++.h"
@@ -1808,7 +1809,9 @@ capd::interval algorithm::evaluate_GPmain() {
     vector<vector<pdrh::mode *>> paths = pdrh::get_all_paths();
     double ressat2 = 0, resunsat2 = 0;
     double result = 0;
-
+    int Observationruns=20;
+    double gmean, gvariance;
+    double data[Observationruns];
     CLOG_IF(global_config.verbose, INFO, "algorithm") << endl << "SIMPLE GP ALGORITHM";
 
     //initialize mu generator
@@ -1848,9 +1851,9 @@ capd::interval algorithm::evaluate_GPmain() {
         double sat2 = 0, unsat2 = 0, undet2 = 0;
         double CI = 0;
         points = 1;
-        double conf = global_config.qmc_conf;
+        double conf = global_config.qmc_conf; // confedence - beta
         double Ca = gsl_cdf_gaussian_Pinv(1 - (1 - conf) / 2, 1);
-        cout << endl << "!!!!!!!!!!!!Ca=" << Ca << endl;
+        cout << endl << "Ca=" << Ca << endl;
 
         // initialize Mu sample
         box mu_sample = rnd::get_sobol_sample(m, mu_domain);
@@ -1860,7 +1863,7 @@ capd::interval algorithm::evaluate_GPmain() {
         double mu_val = 0;
 //        std::vector<double> v;
         mu_val = rnd::mu_vector(mu_sample);
-        cout << "mu_val - " << mu_val << endl;
+        //cout << "mu_val - " << mu_val << endl;
         MUarray[l] = mu_val;
 //        for (int f = 0; f < 2; f++)            //f<2 - 2- number of dimentions!!
 //            v.push_back(ss);
@@ -1878,7 +1881,9 @@ capd::interval algorithm::evaluate_GPmain() {
         gsl_rng_set(rr, static_cast<unsigned long>(l));
 
 #pragma omp parallel
-        while (CI <= Ca) {
+
+       // while (CI <= Ca) {
+         while (points <= Observationruns) {
             box sobol_sample;
             sobol_sample = rnd::get_sobol_sample(q2, sobol_domain2);
             CLOG_IF(global_config.verbose, INFO, "algorithm") << "SOBOL SAMPLE :" << sobol_sample;
@@ -1928,22 +1933,36 @@ capd::interval algorithm::evaluate_GPmain() {
                 }
 
                 //computing sample mean
-                samplemean = sat2 * sat2 / points;
-                //cout << "samplemean==" << samplemean << endl;
-                //computing sample variance
-                samplesq = sat2;
-                //cout << "samplesq==" << samplesq << endl;
-                if (ressat2 == 0 || ressat2 == 1)
-                    //samplevar = pow(pow(points, 2), -1); //ORIGINAL
-                    samplevar = pow(points, -1);
-                else {
-                    //cout << "HERE!!!!" << endl;
-                    CLOG_IF(global_config.verbose, INFO, "algorithm") << "points--" << points;
-                    samplevar = (samplesq - samplemean) / (points - 1);
-                }
+//                samplemean = sat2 * sat2 / points;
+//                //cout << "samplemean==" << samplemean << endl;
+//                //computing sample variance
+//                samplesq = sat2;
+//                //cout << "samplesq==" << samplesq << endl;
+//                if (ressat2 == 0 || ressat2 == 1)
+//                    //samplevar = pow(pow(points, 2), -1); //ORIGINAL
+//                    samplevar = pow(pow(points, 2), -1);
+//                else {
+//                    //cout << "HERE!!!!" << endl;
+//                    CLOG_IF(global_config.verbose, INFO, "algorithm") << "points--" << points;
+//                    samplevar = (samplesq - samplemean) / (points - 1);
+//                }
+
+                 for (int l = 1; l < points; l++) {
+                     if(l<=sat2)
+                     data[l]=1;
+                     else data[l]=0;
+                 }
+
+                 //gmean     = gsl_stats_mean(data, 1, 5);
+                 gvariance = gsl_stats_variance(data, 1, Observationruns);
+                 samplevar=gvariance;
                 //cout << "samplevar==" << samplevar << endl;
                 stdev = sqrt(samplevar);
                 //cout << "stdev==" << stdev << endl;
+
+                 if (stdev == 0 || stdev == 1)
+                     //stdev = sqrt(pow(pow(points, 2), -1));
+                     stdev = sqrt(pow(points, -1));
 
                 // computing confidence intervals
                 result = Ca * stdev / sqrt(points);
@@ -1954,6 +1973,10 @@ capd::interval algorithm::evaluate_GPmain() {
                 points++;
             }
         }
+//        for (int l = 1; l < points; l++) {
+//            cout << endl << "data["<<l<<"]" << data[l]<< endl;
+//        }
+
         points = points - 1;
         Zresultsat = Zresultsat + ressat2;
         Zresultunsat = Zresultunsat + resunsat2;
@@ -1961,7 +1984,6 @@ capd::interval algorithm::evaluate_GPmain() {
         pointsarray[l] = points;
         UParray[l] = ressat2 + result;
         LOarray[l] = resunsat2 - result;
-
         Carray[l] = resunsat2;// - global_config.qmc_acc/2 + result;
         CLOG_IF(global_config.verbose, INFO, "algorithm") << "global_config.qmc_acc/2===" << global_config.qmc_acc / 2;
     }
@@ -1985,7 +2007,7 @@ capd::interval algorithm::evaluate_GPmain() {
         myfile << l << "," << pointsarray[l] << "," << MUarray[l] << "," << LOarray[l] << "," << UParray[l] << "," <<
         Carray[l] << std::endl;
     }
-    //cout << "pointscount===" << pointscount << endl; //mean
+    //ADD EP HERE!
 
 
     return capd::interval(Zresultsat - result, Zresultunsat + result);
